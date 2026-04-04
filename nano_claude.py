@@ -302,7 +302,7 @@ def cmd_save(args: str, state, _config) -> bool:
 
 def save_latest(args: str, state, _config) -> bool:
     from config import MR_SESSION_DIR
-    fname = "session_lastest.json"
+    fname = "session_latest.json"
     path = Path(fname) if "/" in fname else MR_SESSION_DIR / fname
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {
@@ -350,7 +350,7 @@ def cmd_resume(args: str, state, _config) -> bool:
     from config import MR_SESSION_DIR
 
     if not args.strip():
-        path = MR_SESSION_DIR / "session_lastest.json"
+        path = MR_SESSION_DIR / "session_latest.json"
         if not path.exists():
             info("No auto-saved sessions found.")
             return True

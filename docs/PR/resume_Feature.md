@@ -8,7 +8,7 @@ This change adds a lightweight autosave + resume flow so users can continue thei
 
 - New autosave function: `save_latest(args, state, _config)`
   - File: `nano_claude.py`
-  - Saves to: `MR_SESSION_DIR / "session_lastest.json"`
+  - Saves to: `MR_SESSION_DIR / "session_latest.json"`
   - Ensures parent directory exists:
     - `path.parent.mkdir(parents=True, exist_ok=True)`
   - Persists:
@@ -20,7 +20,7 @@ This change adds a lightweight autosave + resume flow so users can continue thei
 - New resume function: `cmd_resume(args, state, _config)`
   - File: `nano_claude.py`
   - `/resume` with no args loads:
-    - `MR_SESSION_DIR / "session_lastest.json"`
+    - `MR_SESSION_DIR / "session_latest.json"`
   - `/resume <file>` loads:
     - `MR_SESSION_DIR / <file>` (or direct path if `/` present)
   - Restores state in same style as `/load`.
@@ -48,6 +48,6 @@ Also on explicit command exit:
 
 1. Use the agent normally.
 2. Exit via `/exit`, `Ctrl+C`, or `Ctrl+D` at prompt.
-3. Session autosaves to `mr_sessions/session_lastest.json`.
+3. Session autosaves to `mr_sessions/session_latest.json`.
 4. Restart agent and run `/resume`.
 5. Continue from restored conversation state.
