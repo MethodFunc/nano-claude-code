@@ -130,26 +130,25 @@ _accumulated_text: list[str] = []   # buffer text during streaming
 
 def stream_text(chunk: str):
     """Called for each streamed text chunk."""
-    print(chunk, end="", flush=True)
     _accumulated_text.append(chunk)
+    if not _RICH:
+        print(chunk, end="", flush=True)
 
 def stream_thinking(chunk: str, verbose: bool):
     if verbose:
         print(clr(chunk, "dim"), end="", flush=True)
 
 def flush_response():
-    """After streaming, optionally re-render as markdown."""
+    """After streaming, render buffered text (as Markdown if Rich is available)."""
     full = "".join(_accumulated_text)
     _accumulated_text.clear()
     if _RICH and full.strip():
-        # Re-print with markdown rendering
-        print("\r", end="")      # go to line start to overwrite last newline
-        # only re-render if there's actual markdown (contains # * ` _ etc.)
         if any(c in full for c in ("#", "*", "`", "_", "[")):
-            print()   # newline after streaming
             console.print(Markdown(full))
-            return
-    print()  # ensure newline after stream
+        else:
+            console.print(full)
+    else:
+        print()  # ensure newline after plain-text stream
 
 def print_tool_start(name: str, inputs: dict, verbose: bool):
     """Show tool invocation."""
@@ -224,28 +223,28 @@ def ask_permission_interactive(desc: str, config: dict) -> bool:
 
 # ── Slash commands ─────────────────────────────────────────────────────────
 
-# ── Proactive Polling Globals ────────────────────────────────────────────────
 import time
-_proactive_enabled = False
-_proactive_interval = 300  # Default 5m = 300s
-_last_interaction_time = time.time()
-_proactive_thread = None
+import traceback
 
 def _proactive_watcher_loop(config):
-    global _last_interaction_time
+    """Background daemon that fires a wake-up prompt after a period of inactivity."""
     while True:
         time.sleep(1)
-        if not _proactive_enabled:
+        if not config.get("_proactive_enabled"):
             continue
         try:
             now = time.time()
-            if now - _last_interaction_time >= _proactive_interval:
-                _last_interaction_time = now
+            interval = config.get("_proactive_interval", 300)
+            last = config.get("_last_interaction_time", now)
+            if now - last >= interval:
+                config["_last_interaction_time"] = now
                 cb = config.get("_run_query_callback")
                 if cb:
-                    cb(f"(System Automated Event) You have been inactive for {_proactive_interval} seconds. Check if you have any pending tasks to execute or simply say 'No pending tasks'.")
-        except Exception:
-            pass
+                    cb(f"(System Automated Event) You have been inactive for {interval} seconds. "
+                       "Check if you have any pending tasks to execute or simply say 'No pending tasks'.")
+        except Exception as e:
+            traceback.print_exc()
+            print(f"\n[proactive watcher error]: {e}", flush=True)
 
 def cmd_help(_args: str, _state, _config) -> bool:
     print(__doc__)
@@ -958,38 +957,52 @@ _voice_language: str = "auto"
 
 
 def cmd_proactive(args: str, state, config) -> bool:
-    """Toggle proactive background polling. Usage: /proactive [duration] (default 5m)"""
-    global _proactive_enabled, _proactive_interval, _last_interaction_time
-    
+    """Manage proactive background polling.
+
+    /proactive            — show current status
+    /proactive 5m         — enable, trigger after 5 min of inactivity
+    /proactive 30s / 1h   — enable with custom interval
+    /proactive off        — disable
+    """
     args = args.strip().lower()
-    
-    if _proactive_enabled and not args:
-        _proactive_enabled = False
+
+    # Status query: no args → just print current state
+    if not args:
+        if config.get("_proactive_enabled"):
+            interval = config.get("_proactive_interval", 300)
+            info(f"Proactive background polling: ON  (triggering every {interval}s of inactivity)")
+        else:
+            info("Proactive background polling: OFF  (use /proactive 5m to enable)")
+        return True
+
+    # Explicit disable
+    if args == "off":
+        config["_proactive_enabled"] = False
         info("Proactive background polling: OFF")
         return True
-        
-    if args:
-        multiplier = 1
-        val_str = args
-        if args.endswith("m"):
-            multiplier = 60
-            val_str = args[:-1]
-        elif args.endswith("h"):
-            multiplier = 3600
-            val_str = args[:-1]
-        elif args.endswith("s"):
-            val_str = args[:-1]
-            
-        try:
-            val = int(val_str)
-            _proactive_interval = val * multiplier
-        except ValueError:
-            err(f"Invalid duration format: '{args}'. Use '5m', '30s', etc.")
-            return True
-            
-    _proactive_enabled = True
-    _last_interaction_time = time.time()
-    info(f"Proactive background polling: ON (Triggering every {_proactive_interval}s of inactivity)")
+
+    # Parse duration (e.g. "5m", "30s", "1h", or plain integer seconds)
+    multiplier = 1
+    val_str = args
+    if args.endswith("m"):
+        multiplier = 60
+        val_str = args[:-1]
+    elif args.endswith("h"):
+        multiplier = 3600
+        val_str = args[:-1]
+    elif args.endswith("s"):
+        val_str = args[:-1]
+
+    try:
+        val = int(val_str)
+        config["_proactive_interval"] = val * multiplier
+    except ValueError:
+        err(f"Invalid duration: '{args}'. Use '5m', '30s', '1h', or 'off'.")
+        return True
+
+    config["_proactive_enabled"] = True
+    config["_last_interaction_time"] = time.time()
+    info(f"Proactive background polling: ON  (triggering every {config['_proactive_interval']}s of inactivity)")
     return True
 
 def cmd_voice(args: str, state, config) -> bool:
@@ -1197,15 +1210,17 @@ def repl(config: dict, initial_prompt: str = None):
 
     query_lock = threading.Lock()
     
-    global _proactive_thread, _last_interaction_time
-    if _proactive_thread is None:
-        _last_interaction_time = time.time()
-        _proactive_thread = threading.Thread(target=_proactive_watcher_loop, args=(config,), daemon=True)
-        _proactive_thread.start()
+    # Initialize proactive polling state in config (avoids module-level globals)
+    config.setdefault("_proactive_enabled", False)
+    config.setdefault("_proactive_interval", 300)
+    config.setdefault("_last_interaction_time", time.time())
+    if config.get("_proactive_thread") is None:
+        t = threading.Thread(target=_proactive_watcher_loop, args=(config,), daemon=True)
+        config["_proactive_thread"] = t
+        t.start()
     
     def run_query(user_input: str, is_background: bool = False):
         nonlocal verbose
-        global _last_interaction_time
         
         with query_lock:
             verbose = config.get("verbose", False)
@@ -1263,7 +1278,7 @@ def repl(config: dict, initial_prompt: str = None):
         from tools import drain_pending_questions
         drain_pending_questions()
         
-        _last_interaction_time = time.time()
+        config["_last_interaction_time"] = time.time()
 
     config["_run_query_callback"] = lambda msg: run_query(msg, is_background=True)
 
